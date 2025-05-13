@@ -480,5 +480,3 @@ app.delete("/api/surat-keluar/:id", async (req, res) => {
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 module.exports = app;
-// const serverless = require("serverless-http");
-// module.exports.handler = serverless(app);
