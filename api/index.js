@@ -351,7 +351,7 @@ app.put("/api/surat-masuk/:id", async (req, res) => {
         noPetunjuk: noPetunjuk ?? existing.noPetunjuk,
         noPaket: noPaket ?? existing.noPaket,
         disposisikanKe: disposisikanKe ?? existing.disposisikanKe, // ✅ disimpan di sini
-        isiDisposisi: isidisposisi ?? existing.isiDisposisi,
+        isiDisposisi: isiDisposisi ?? existing.isiDisposisi,
         tenggatWaktu: parseDate(tenggatWaktu) ?? existing.tenggatWaktu,
         sifatSurat: sifatSurat ?? existing.sifatSurat,
         fileUrl,
