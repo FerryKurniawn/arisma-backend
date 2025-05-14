@@ -6,31 +6,22 @@ const jwt = require("jsonwebtoken");
 const prisma = new PrismaClient();
 const cors = require("cors");
 const path = require("path");
-const multer = require("multer");
 const fs = require("fs");
 const dotenv = require("dotenv");
 dotenv.config();
+const fileUpload = require("express-fileupload");
+app.use(fileUpload());
 const PORT = process.env.PORT || 2000;
 
 app.use(cors());
 app.use(express.json());
-const uploadFolder = "uploads/";
-if (!fs.existsSync(uploadFolder)) {
-  fs.mkdirSync(uploadFolder);
-}
 
-// Multer storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadFolder);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + "-" + file.originalname);
-  },
-});
+const { createClient } = require("@supabase/supabase-js");
 
-const upload = multer({ storage: storage });
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY // Gunakan service role agar bisa upload
+);
 
 // Start server
 app.listen(PORT, (err) => {
@@ -234,7 +225,7 @@ app.get("/api/surat-masuk/:id", async (req, res) => {
   }
 });
 
-app.post("/api/surat-masuk", upload.single("fileUrl"), async (req, res) => {
+app.post("/api/surat-masuk", async (req, res) => {
   const {
     noSurat,
     perihal,
@@ -245,14 +236,27 @@ app.post("/api/surat-masuk", upload.single("fileUrl"), async (req, res) => {
     isiDisposisi,
   } = req.body;
 
-  console.log("REQ.BODY:", req.body);
-  console.log("REQ.FILE:", req.file);
+  const file = req.files?.fileUrl;
 
   try {
     const parsedTanggal = new Date(tanggalTerima);
-
     if (isNaN(parsedTanggal)) {
       return res.status(400).json({ message: "Format tanggal tidak valid" });
+    }
+
+    let fileUrl = null;
+
+    if (file) {
+      const fileName = `${Date.now()}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("surat-masuk") // Pastikan nama bucket sama
+        .upload(fileName, file.data, {
+          contentType: file.mimetype,
+        });
+
+      if (uploadError) throw uploadError;
+
+      fileUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/surat-masuk/${fileName}`;
     }
 
     const suratMasuk = await prisma.suratMasuk.create({
@@ -262,15 +266,17 @@ app.post("/api/surat-masuk", upload.single("fileUrl"), async (req, res) => {
         alamatPengirim,
         tanggalTerima: parsedTanggal,
         sifatSurat,
-        fileUrl: req.file ? `/uploads/${req.file.filename}` : null,
+        fileUrl,
         disposisi,
         isiDisposisi,
       },
     });
 
-    res.send("Surat masuk telah berhasil ditambahkan");
+    res
+      .status(201)
+      .json({ message: "Surat masuk ditambahkan", data: suratMasuk });
   } catch (err) {
-    console.error("❌ ERROR SAAT CREATE SuratMasuk:", err); // Tambah log ini
+    console.error("❌ ERROR SAAT CREATE SuratMasuk:", err);
     res.status(500).json({
       message: "Terjadi kesalahan server",
       error: err.message,
@@ -278,56 +284,84 @@ app.post("/api/surat-masuk", upload.single("fileUrl"), async (req, res) => {
   }
 });
 
-app.put("/api/surat-masuk/:id", upload.single("fileUrl"), async (req, res) => {
+app.put("/api/surat-masuk/:id", async (req, res) => {
+  const { id } = req.params;
   const {
     noSurat,
+    noBerkas,
+    tanggalSurat,
+    tanggalDiterima,
+    pengirim,
     perihal,
-    alamatPengirim,
-    tanggalTerima,
-    sifatSurat,
-    fileUrl,
-    isiDisposisi,
-    disposisi,
+    noPetunjuk,
+    noPaket,
+    disposisikanKe,
+    isidisposisi,
     tenggatWaktu,
+    sifatSurat,
   } = req.body;
 
-  const id = parseInt(req.params.id);
-  if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
-
-  const dataToUpdate = {};
-
-  // Tambahkan hanya field yang ada dan valid
-  if (noSurat) dataToUpdate.noSurat = noSurat;
-  if (perihal) dataToUpdate.perihal = perihal;
-  if (alamatPengirim) dataToUpdate.alamatPengirim = alamatPengirim;
-  if (sifatSurat) dataToUpdate.sifatSurat = sifatSurat;
-  if (fileUrl) dataToUpdate.fileUrl = fileUrl;
-  if (isiDisposisi) dataToUpdate.isiDisposisi = isiDisposisi;
-  if (disposisi) dataToUpdate.disposisi = disposisi;
-  if (tenggatWaktu) dataToUpdate.tenggatWaktu = new Date(tenggatWaktu);
-
-  // Khusus tanggalTerima, validasi terlebih dahulu
-  if (tanggalTerima) {
-    const parsedDate = new Date(tanggalTerima);
-    if (!isNaN(parsedDate)) {
-      dataToUpdate.tanggalTerima = parsedDate;
-    } else {
-      return res
-        .status(400)
-        .json({ error: "Format tanggalTerima tidak valid" });
-    }
-  }
+  const file = req.files?.fileUrl;
 
   try {
-    const updated = await prisma.suratMasuk.update({
-      where: { id },
-      data: dataToUpdate,
+    // Ambil surat lama
+    const existing = await prisma.suratMasuk.findUnique({
+      where: { id: Number(id) },
     });
 
-    res.json(updated);
+    if (!existing) {
+      return res.status(404).json({ message: "Surat tidak ditemukan" });
+    }
+
+    let fileUrl = existing.fileUrl;
+
+    // Upload file baru jika ada
+    if (file) {
+      const fileName = `${Date.now()}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("surat-masuk")
+        .upload(fileName, file.data, {
+          contentType: file.mimetype,
+        });
+
+      if (uploadError) {
+        console.error("❌ Upload error:", uploadError);
+        throw uploadError;
+      }
+
+      fileUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/surat-masuk/${fileName}`;
+    }
+
+    // Konversi tanggal jika valid
+    const parseDate = (input) => {
+      const d = new Date(input);
+      return isNaN(d.getTime()) ? undefined : d;
+    };
+
+    // Update surat
+    const updated = await prisma.suratMasuk.update({
+      where: { id: Number(id) },
+      data: {
+        noSurat: noSurat ?? existing.noSurat,
+        noBerkas: noBerkas ?? existing.noBerkas,
+        tanggalSurat: parseDate(tanggalSurat) ?? existing.tanggalSurat,
+        tanggalDiterima: parseDate(tanggalDiterima) ?? existing.tanggalDiterima,
+        pengirim: pengirim ?? existing.pengirim,
+        perihal: perihal ?? existing.perihal,
+        noPetunjuk: noPetunjuk ?? existing.noPetunjuk,
+        noPaket: noPaket ?? existing.noPaket,
+        disposisikanKe: disposisikanKe ?? existing.disposisikanKe, // ✅ disimpan di sini
+        isiDisposisi: isidisposisi ?? existing.isiDisposisi,
+        tenggatWaktu: parseDate(tenggatWaktu) ?? existing.tenggatWaktu,
+        sifatSurat: sifatSurat ?? existing.sifatSurat,
+        fileUrl,
+      },
+    });
+
+    res.json({ message: "Surat masuk berhasil diperbarui", data: updated });
   } catch (error) {
-    console.error("Error updating Surat Masuk:", error);
-    res.status(500).json({ error: "Terjadi kesalahan saat mengupdate surat" });
+    console.error("❌ Update error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 });
 
@@ -392,7 +426,7 @@ app.get("/api/surat-keluar/:id", async (req, res) => {
   }
 });
 
-app.post("/api/surat-keluar", upload.single("fileUrl"), async (req, res) => {
+app.post("/api/surat-keluar", async (req, res) => {
   const {
     noSurat,
     noBerkas,
@@ -403,10 +437,27 @@ app.post("/api/surat-keluar", upload.single("fileUrl"), async (req, res) => {
     noPaket,
   } = req.body;
 
+  const file = req.files?.fileUrl;
+
   try {
     const parsedDate = new Date(tanggalKeluar);
     if (isNaN(parsedDate)) {
       return res.status(400).json({ message: "Format tanggal tidak valid" });
+    }
+
+    let fileUrl = null;
+
+    if (file) {
+      const fileName = `${Date.now()}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("surat-keluar") // Bucket harus sudah dibuat
+        .upload(fileName, file.data, {
+          contentType: file.mimetype,
+        });
+
+      if (uploadError) throw uploadError;
+
+      fileUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/surat-keluar/${fileName}`;
     }
 
     const surat = await prisma.suratKeluar.create({
@@ -418,7 +469,7 @@ app.post("/api/surat-keluar", upload.single("fileUrl"), async (req, res) => {
         perihal,
         noPetunjuk,
         noPaket,
-        fileUrl: req.file ? `/uploads/${req.file.filename}` : null,
+        fileUrl,
       },
     });
 
@@ -431,7 +482,7 @@ app.post("/api/surat-keluar", upload.single("fileUrl"), async (req, res) => {
   }
 });
 
-app.put("/api/surat-keluar/:id", upload.single("fileUrl"), async (req, res) => {
+app.put("/api/surat-keluar/:id", async (req, res) => {
   const { id } = req.params;
   const {
     noSurat,
@@ -443,12 +494,29 @@ app.put("/api/surat-keluar/:id", upload.single("fileUrl"), async (req, res) => {
     noPaket,
   } = req.body;
 
+  const file = req.files?.fileUrl;
+
   try {
     const existing = await prisma.suratKeluar.findUnique({
       where: { id: Number(id) },
     });
     if (!existing)
       return res.status(404).json({ message: "Surat tidak ditemukan" });
+
+    let fileUrl = existing.fileUrl;
+
+    if (file) {
+      const fileName = `${Date.now()}_${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("surat-keluar")
+        .upload(fileName, file.data, {
+          contentType: file.mimetype,
+        });
+
+      if (uploadError) throw uploadError;
+
+      fileUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/surat-keluar/${fileName}`;
+    }
 
     const updated = await prisma.suratKeluar.update({
       where: { id: Number(id) },
@@ -460,7 +528,7 @@ app.put("/api/surat-keluar/:id", upload.single("fileUrl"), async (req, res) => {
         perihal,
         noPetunjuk,
         noPaket,
-        fileUrl: req.file ? `/uploads/${req.file.filename}` : existing.fileUrl,
+        fileUrl,
       },
     });
 

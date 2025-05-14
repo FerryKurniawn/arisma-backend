@@ -31,7 +31,6 @@ model SuratMasuk {
   tanggalTerima  DateTime
   sifatSurat     SifatSurat
   fileUrl        String?
-  disposisi      String?
   isiDisposisi   String?
   disposisikanKe String?  // Menambahkan field untuk "Disposisikan Ke"
   tenggatWaktu   DateTime? // Menambahkan field untuk "Tenggat Waktu"
