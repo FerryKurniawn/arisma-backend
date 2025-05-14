@@ -296,7 +296,7 @@ app.put("/api/surat-masuk/:id", async (req, res) => {
     noPetunjuk,
     noPaket,
     disposisikanKe,
-    isidisposisi,
+    isiDisposisi,
     tenggatWaktu,
     sifatSurat,
   } = req.body;
