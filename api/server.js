@@ -551,7 +551,3 @@ app.delete("/api/surat-keluar/:id", async (req, res) => {
     res.status(500).json({ message: "Gagal menghapus surat keluar." });
   }
 });
-
-// kepsek
-
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
